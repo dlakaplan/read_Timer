@@ -1,0 +1,8 @@
+setup.py
+read_Timer/__init__.py
+read_Timer.egg-info/PKG-INFO
+read_Timer.egg-info/SOURCES.txt
+read_Timer.egg-info/dependency_links.txt
+read_Timer.egg-info/not-zip-safe
+read_Timer.egg-info/requires.txt
+read_Timer.egg-info/top_level.txt
