@@ -264,9 +264,10 @@ class TimerHeader:
         self.ephem = out.decode().rstrip("\x00")
 
         # process some of the more useful keywords
-        # self.starttime = Time(
-        #    self.keywords["mjd"].value + self.keywords["fracmjd"].value, format="mjd"
-        # )
+        # try this, although we might over-write it
+        self.starttime = Time(
+            self.keywords["mjd"].value + self.keywords["fracmjd"].value, format="mjd"
+        )
         if self.keywords["coord_type"].value == "05":
             self.position = SkyCoord(
                 self.keywords["ra"].value * u.rad, self.keywords["dec"].value * u.rad
