@@ -11,18 +11,24 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 
 _data_lengths = {"int": 4, "float": 4, "double": 8, "uint32_t": 4}
+_endian = ">"
 
 
 def stripcomments(text):
-    """
+    """Returns text with C/C++ comments removed
+
     https://stackoverflow.com/questions/241327/remove-c-and-c-comments-using-python
     """
     return re.sub("//.*?\n|/\*.*?\*/", "", text, flags=re.S)
 
 
-def get_definition(filename="timer.h"):
+def get_definition(filename):
     """get Timer file header definition
-    
+
+    Parameters
+    ----------
+    filename : name of .h file defining struct
+
     Returns
     -------
     keywords : dict
@@ -32,7 +38,10 @@ def get_definition(filename="timer.h"):
         pkg_resources.resource_filename(__name__, "data/"), filename
     )
 
-    fh = open(_header_file, "r",)
+    fh = open(
+        _header_file,
+        "r",
+    )
 
     lines = stripcomments("".join(fh.readlines())).split("\n")
 
@@ -87,6 +96,24 @@ class Keyword:
         self.dtype = dtype
         self.value = value
 
+    def read(self, fptr):
+        out = fptr.read(self.size)
+        if self.dtype == "char":
+            try:
+                result = out.decode().rstrip("\x00")
+            except UnicodeDecodeError:
+                logger.warning(f"Unable to decode contents of '{varname}'")
+        elif self.dtype == "int":
+            result = struct.unpack(_endian + "i", out)[0]
+        elif self.dtype == "float":
+            result = struct.unpack(_endian + "f", out)[0]
+        elif self.dtype == "double":
+            result = struct.unpack(_endian + "d", out)[0]
+        elif self.dtype == "uint32_t":
+            # unsigned 4-byte integer?
+            result = struct.unpack(_endian + "I", out)[0]
+        self.value = result
+
     @property
     def dtype(self):
         return self._dtype
@@ -114,6 +141,12 @@ class Band:
             self.size += _band_keyword_definition[key].size
             self.sequence += _band_keyword_definition[key].dtype[0]
 
+    def read(self, fptr):
+        out = fptr.read(self.size)
+        results = struct.unpack(">" + self.sequence, out)
+        for k, r in zip(self.keywords, results):
+            self.keywords[k].value = r
+
     def asstr(self):
         s = []
         for key in self.keywords:
@@ -130,11 +163,17 @@ class Band:
     def __getitem__(self, key):
         return self.keywords[key]
 
+    def __setitem__(self, key, value):
+        self.keywords[key].value = value
+
 
 class TimerHeader:
     """Read a PSRCHIVE Timer header
     the header is a struct defined in "data/timer.h"
     which is a copy of "psrchive/Base/Formats/Timer/timer.h"
+
+    also uses: "data/band.h"
+    which is a copy of "psrchive/Base/Formats/Timer/band.h"
 
     This reads all of the header keywords it can and puts them into self.keywords
     It also extracts a few of particular importance:
@@ -143,6 +182,7 @@ class TimerHeader:
     stoptime
     duration
     position
+    psrname
     """
 
     def __init__(self, filename):
@@ -154,28 +194,12 @@ class TimerHeader:
         for varname in self.keywords:
             if self.keywords[varname].dtype == "band":
                 result = Band(name=varname)
-                self.keywords[varname].size = result.size
-            out = f.read(self.keywords[varname].size)
-            if self.keywords[varname].dtype == "char":
-                try:
-                    result = out.decode().rstrip("\x00")
-                except UnicodeDecodeError:
-                    logger.warning(f"Unable to decode contents of '{varname}'")
-            elif self.keywords[varname].dtype == "band":
-                results = struct.unpack(">" + result.sequence, out)
-                for k, r in zip(result.keywords, results):
-                    result.keywords[k].value = r
-            elif self.keywords[varname].dtype == "int":
-                result = struct.unpack(">i", out)[0]
-            elif self.keywords[varname].dtype == "float":
-                result = struct.unpack(">f", out)[0]
-            elif self.keywords[varname].dtype == "double":
-                result = struct.unpack(">d", out)[0]
-            elif self.keywords[varname].dtype == "uint32_t":
-                # unsigned 4-byte integer?
-                result = struct.unpack(">I", out)[0]
-            self.keywords[varname].value = result
+                result.read(f)
+                self.keywords[varname].value = result
+            else:
+                self.keywords[varname].read(f)
 
+        # process some of the more useful keywords
         self.starttime = Time(
             self.keywords["mjd"].value + self.keywords["fracmjd"].value, format="mjd"
         )
@@ -221,6 +245,9 @@ class TimerHeader:
 
     def __getitem__(self, key):
         return self.keywords[key]
+
+    def __setitem__(self, key, value):
+        self.keywords[key].value = value
 
 
 _timer_keyword_definition = get_definition("timer.h")
