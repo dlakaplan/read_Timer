@@ -7,7 +7,7 @@ import copy
 from loguru import logger
 
 from astropy import units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, AltAz
 from astropy.time import Time
 
 _data_lengths = {"int": 4, "float": 4, "double": 8, "uint32_t": 4}
@@ -136,6 +136,14 @@ class Keyword:
 
 
 class Band:
+    """Store the metadata only for each band
+
+    Also keep a copy of:
+    name
+    bandwidth
+    frequency
+    """
+
     def __init__(self, name=None):
         self.keywords = copy.deepcopy(_band_keyword_definition)
         self.name = name
@@ -149,7 +157,7 @@ class Band:
 
     def read(self, fptr):
         out = fptr.read(self.size)
-        results = struct.unpack(">" + self.sequence, out)
+        results = struct.unpack(_endian + self.sequence, out)
         for k, r in zip(self.keywords, results):
             self.keywords[k].value = r
         self.frequency = self["centrefreq"].value * u.MHz
@@ -177,11 +185,21 @@ class Band:
 
 
 class Subint:
+    """store the metadata only for each Sub-integration
+
+    Also keep a copy of:
+    number
+    starttime
+    ingegration
+    pointing
+    """
+
     def __init__(self, number=None):
         self.keywords = copy.deepcopy(_subint_keyword_definition)
         self.number = number
         self.starttime = None
         self.integration = None
+        self.pointing = None
 
     @property
     def size(self):
@@ -197,6 +215,10 @@ class Subint:
             self.keywords["mjd"].value + self.keywords["fracmjd"].value, format="mjd"
         )
         self.integration = self.keywords["integration"].value * u.s
+        self.pointing = AltAz(
+            alt=(90 * u.deg - self["tel_zen"].value * u.deg),
+            az=self["tel_az"].value * u.deg,
+        )
 
     def asstr(self):
         s = []
@@ -236,16 +258,24 @@ class TimerHeader:
     psrname
     polyco
     ephem
+
+    and then it reads a list of subints
     """
 
     def __init__(self, filename=None):
         self.keywords = copy.deepcopy(_timer_keyword_definition)
         self.subints = []
+        self.filename = filename
+        self.psrname = None
+        self.starttime = None
+        self.duration = None
+        self.telescope = None
+
         if filename is not None:
             self.read(filename)
 
     def read(self, filename):
-        logger.debug(f"Reading Timer file {filename}")
+        logger.debug(f"Reading Timer file '{filename}'")
         self.filename = filename
         f = open(filename, "rb")
         for varname in self.keywords:
@@ -291,21 +321,22 @@ class TimerHeader:
         self.telescope = self.keywords["telid"].value
         self.psrname = self.keywords["psrname"].value
         self.nchannels = self.keywords["nsub_band"].value
-        # is this right
+        # CHECK
+        # is this right?
+        # what about bandb?
         self.npol = self.keywords["banda"].value["npol"].value
         logger.debug(f"Reading {self.keywords['nsub_int'].value} subints")
         self.duration = 0 * u.s
-        logger.debug(f"{f.tell()}")
         try:
             self.read_subints(f)
             # set the start time to the start of the first subint
             self.starttime = self.subints[0].starttime
         except:
             pass
-        logger.debug(f"Telescope = {self.telescope}")
-        logger.debug(f"Pulsar = {self.psrname}")
-        logger.debug(f"Start = {self.starttime.mjd} = {self.starttime.iso}")
-        logger.debug(f"Duration = {self.duration}")
+        logger.info(f"Telescope = {self.telescope}")
+        logger.info(f"Pulsar = {self.psrname}")
+        logger.info(f"Start = {self.starttime.mjd} = {self.starttime.iso}")
+        logger.info(f"Duration = {self.duration}")
 
         # this is just for the first subint
         # self.duration = (
@@ -315,7 +346,7 @@ class TimerHeader:
 
     def read_subints(self, fptr):
         for subint in range(self.keywords["nsub_int"].value):
-            logger.debug(f"Reading subint {subint} at position {fptr.tell()}")
+            logger.trace(f"Reading subint {subint} at position {fptr.tell()}")
             self.subints.append(Subint(number=subint))
             self.subints[-1].read(fptr)
             self.duration += self.subints[-1].integration
@@ -323,6 +354,7 @@ class TimerHeader:
 
     @property
     def size(self):
+        """This excludes the subints"""
         size = 0
         for k in self.keywords:
             size += self.keywords[k].size
@@ -330,18 +362,20 @@ class TimerHeader:
 
     @property
     def subint_data_size(self):
+        """This is the size of the info in the subint that is _not_ in the 'mini' header"""
         if self["wts_and_bpass"]:
-            # defined in load_extra()
+            # defined in Pulsar::TimerIntegration::load_extra()
             # stores data + weights + bandpass
             size = self.nchannels * _data_lengths["float"] * (1 + 2 * self.npol)
         else:
-            # defined in load_old()
+            # defined in Pulsar::TimerIntegration::load_old()
             # looks like float(scale) + float(offset) + nbin*nchan*npol*2
             # CHECK
             size = (
                 _data_lengths["float"] * 2
                 + self.nchannels * self.npol * self["nbin"].value * 2
             )
+        # below is defined in Pulsar::TimerProfile_load
         # floats for centrefreq, wt
         # ints for nbin, poln
         size += (
@@ -366,7 +400,7 @@ class TimerHeader:
         return s
 
     def __repr__(self):
-        s = f"Timer file {self.filename}: {self.psrname} at MJD {self.starttime.mjd} for {self.duration} with {self.telescope}"
+        s = f"Timer file {self.filename}: {self.psrname} at MJD {self.starttime} for {self.duration} with {self.telescope}"
         return s
 
     def __str__(self):
