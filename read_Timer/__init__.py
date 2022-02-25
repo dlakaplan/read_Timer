@@ -141,6 +141,8 @@ class Band:
         self.name = name
         self.size = 0
         self.sequence = ""
+        self.bandwidth = None
+        self.frequency = None
         for key in _band_keyword_definition:
             self.size += _band_keyword_definition[key].size
             self.sequence += _band_keyword_definition[key].dtype[0]
@@ -178,6 +180,8 @@ class Subint:
     def __init__(self, number=None):
         self.keywords = copy.deepcopy(_subint_keyword_definition)
         self.number = number
+        self.starttime = None
+        self.integration = None
 
     @property
     def size(self):
@@ -291,9 +295,13 @@ class TimerHeader:
         self.npol = self.keywords["banda"].value["npol"].value
         logger.debug(f"Reading {self.keywords['nsub_int'].value} subints")
         self.duration = 0 * u.s
-        self.read_subints(f)
-        # set the start time to the start of the first subint
-        self.starttime = self.subints[0].starttime
+        logger.debug(f"{f.tell()}")
+        try:
+            self.read_subints(f)
+            # set the start time to the start of the first subint
+            self.starttime = self.subints[0].starttime
+        except:
+            pass
         logger.debug(f"Telescope = {self.telescope}")
         logger.debug(f"Pulsar = {self.psrname}")
         logger.debug(f"Start = {self.starttime.mjd} = {self.starttime.iso}")
@@ -307,6 +315,7 @@ class TimerHeader:
 
     def read_subints(self, fptr):
         for subint in range(self.keywords["nsub_int"].value):
+            logger.debug(f"Reading subint {subint} at position {fptr.tell()}")
             self.subints.append(Subint(number=subint))
             self.subints[-1].read(fptr)
             self.duration += self.subints[-1].integration
@@ -322,9 +331,11 @@ class TimerHeader:
     @property
     def subint_data_size(self):
         if self["wts_and_bpass"]:
+            # defined in load_extra()
             # stores data + weights + bandpass
             size = self.nchannels * _data_lengths["float"] * (1 + 2 * self.npol)
         else:
+            # defined in load_old()
             # looks like float(scale) + float(offset) + nbin*nchan*npol*2
             # CHECK
             size = (
@@ -333,11 +344,19 @@ class TimerHeader:
             )
         # floats for centrefreq, wt
         # ints for nbin, poln
-        size += self.nchannels * (_data_lengths["float"] * 2 + _data_lengths["int"] * 2)
+        size += (
+            self.npol
+            * self.nchannels
+            * (_data_lengths["float"] * 2 + _data_lengths["int"] * 2)
+        )
         # has 2 floats + nbin * 2byte integers
         # CHECK: this is in the "no_amps" case
         # otherwise it's more complicated?
-        size += self.nchannels * (2 * _data_lengths["float"] + self["nbin"].value * 2)
+        size += (
+            self.npol
+            * self.nchannels
+            * (2 * _data_lengths["float"] + self["nbin"].value * 2)
+        )
         return size
 
     def asstr(self):
