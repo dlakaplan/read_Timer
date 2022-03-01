@@ -4,6 +4,12 @@ Read [PSRCHIVE](http://psrchive.sourceforge.net/) Timer file headers
 ## Requirements:
 * `astropy`
 
+## Contents:
+In `read_Timer/data` are 3 header files taken from `PSRCHIVE` that are used to define the metadata:
+* `timer.h`: overall metadata header
+* `band.h`: individual sub-bands
+* `mini.h`: mini-header for each sub-integration
+
 ## Example:
 ```
 In [1]: import read_Timer
